@@ -1,0 +1,12 @@
+# Fichiers temporaires
+odt_content.txt
+~$*.odt
+
+# Fichiers sensibles Laravel
+dsid/.env
+dsid/.env.*
+!dsid/.env.example
+
+# Dépendances
+dsid/vendor/
+dsid/node_modules/
