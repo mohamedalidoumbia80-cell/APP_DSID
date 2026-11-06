@@ -1,11 +1,18 @@
 # Fichiers temporaires
 odt_content.txt
 ~$*.odt
+~$*.docx
+.~lock.*
 
 # Fichiers sensibles Laravel
 dsid/.env
 dsid/.env.*
 !dsid/.env.example
+
+# Données locales (base SQLite, documents déposés, journaux)
+dsid/database/*.sqlite
+dsid/storage/app/private/
+dsid/storage/logs/*.log
 
 # Dépendances
 dsid/vendor/

@@ -43,17 +43,23 @@ docker compose exec app php artisan migrate
 docker compose exec app php artisan db:seed
 docker compose exec app php artisan route:list
 docker compose exec app php artisan test
-docker compose logs -f app nginx db
+docker compose logs -f app nginx db queue scheduler
 ```
 
 Les pièces jointes sont enregistrées sur le disque privé Laravel et ne sont servies qu’après authentification et vérification des droits. Les sauvegardes doivent couvrir la base PostgreSQL et le répertoire `dsid/storage/app/private`.
+
+## Exports et notifications
+d
+Les rapports permettent de télécharger des fichiers Excel (`.xlsx`), CSV et PDF. L’export Excel utilise l’extension PHP `zip`, activée dans l’image Docker.
+
+Les e-mails signalent l’affectation ou la réaffectation d’une tâche à son agent, la validation d’une activité à son responsable et le passage d’une activité en retard. Les services Docker `queue` et `scheduler` traitent les notifications et la vérification quotidienne des retards. Configurez `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD` et `MAIL_FROM_ADDRESS` dans `.env` pour livrer les messages. Le mailer `log` écrit les messages dans les journaux au lieu de les envoyer.
+
+Le tableau de bord met en cache ses compteurs et sa répartition par domaine pendant cinq minutes. La liste des activités et le tableau de bord partagent les mêmes règles de visibilité.
 
 ## Fonctionnalités livrées
 
 - connexion, déconnexion, réinitialisation du mot de passe et limitation des tentatives ;
 - gestion des rôles, utilisateurs, domaines, activités, tâches et documents ;
-- tableau de bord, filtres d’activités, retards calculés et rapport imprimable ;
+- tableau de bord, filtres d’activités, retards calculés et exports imprimables, Excel, CSV et PDF ;
 - progression d’une activité calculée depuis la moyenne de progression de ses tâches ;
 - journal append-only des créations, mises à jour et archivages métier.
-
-Les exports Excel/PDF automatiques, les axes SDSI administrables et la validation formelle par la direction restent des évolutions à compléter.

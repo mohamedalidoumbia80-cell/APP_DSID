@@ -3,57 +3,49 @@
 namespace App\Http\Controllers;
 
 use App\Enums\ActivityStatus;
+use App\Http\Requests\StoreTacheRequest;
+use App\Http\Requests\UpdateTacheRequest;
 use App\Models\Activite;
 use App\Models\Tache;
-use App\Models\User;
+use App\Notifications\ActivityUpdateNotification;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 class TacheController extends Controller
 {
-    public function store(Request $request, Activite $activite): RedirectResponse
+    public function store(StoreTacheRequest $request, Activite $activite): RedirectResponse
     {
         $this->authorize('create', [Tache::class, $activite]);
-        $data = $request->validate([
-            'title' => ['required', 'string', 'max:200'],
-            'description' => ['nullable', 'string', 'max:10000'],
-            'due_date' => ['nullable', 'date', 'after_or_equal:'.$activite->start_date->toDateString()],
-            'agent_id' => ['required', 'integer', 'exists:users,id'],
-        ]);
-        abort_unless(User::whereKey($data['agent_id'])->where('is_active', true)->whereHas('role', fn ($q) => $q->where('name', 'agent'))->exists(), 422);
+        $data = $request->validated();
 
-        $activite->taches()->create($data + ['created_by' => $request->user()->id]);
+        $tache = $activite->taches()->create($data + ['created_by' => $request->user()->id]);
+        $tache->agent->notify(new ActivityUpdateNotification(
+            $activite,
+            'Une tâche vous a été attribuée',
+            'Une nouvelle tâche vous a été attribuée dans le cadre de cette activité.',
+        ));
         $activite->synchroniserAvancement();
 
         return back()->with('success', 'Tâche créée.');
     }
 
-    public function update(Request $request, Tache $tache): RedirectResponse
+    public function update(UpdateTacheRequest $request, Tache $tache): RedirectResponse
     {
         $this->authorize('update', $tache);
-        $isAgent = $request->user()->hasRole('agent');
-        $rules = [
-            'status' => ['required', Rule::enum(ActivityStatus::class)],
-            'progress' => ['required', 'integer', 'between:0,100'],
-        ];
-
-        if (! $isAgent) {
-            $rules += [
-                'title' => ['required', 'string', 'max:200'],
-                'description' => ['nullable', 'string', 'max:10000'],
-                'due_date' => ['nullable', 'date'],
-                'agent_id' => ['required', 'integer', 'exists:users,id'],
-            ];
-        }
-
-        $data = $request->validate($rules);
+        $data = $request->validated();
         if ($data['status'] === ActivityStatus::TERMINE->value) {
             $data['progress'] = 100;
         } elseif ($data['status'] === ActivityStatus::A_DEMARRER->value) {
             $data['progress'] = 0;
         }
+        $previousAgentId = $tache->agent_id;
         $tache->update($data);
+        if (isset($data['agent_id']) && (int) $data['agent_id'] !== $previousAgentId) {
+            $tache->agent->notify(new ActivityUpdateNotification(
+                $tache->activite,
+                'Une tâche vous a été attribuée',
+                'Une tâche vous a été réattribuée dans le cadre de cette activité.',
+            ));
+        }
         $tache->activite->synchroniserAvancement();
 
         return back()->with('success', 'Tâche mise à jour.');
@@ -65,6 +57,7 @@ class TacheController extends Controller
         $activite = $tache->activite;
         $tache->delete();
         $activite->synchroniserAvancement();
+
         return back()->with('success', 'Tâche archivée.');
     }
 }

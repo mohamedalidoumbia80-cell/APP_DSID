@@ -3,7 +3,10 @@
 namespace App\Providers;
 
 use App\Models\Activite;
+use App\Models\AxeSdsi;
 use App\Models\Document;
+use App\Models\Domaine;
+use App\Models\Service;
 use App\Models\Tache;
 use App\Models\User;
 use App\Observers\AuditObserver;
@@ -28,5 +31,8 @@ class AppServiceProvider extends ServiceProvider
         Tache::observe(AuditObserver::class);
         Document::observe(AuditObserver::class);
         User::observe(AuditObserver::class);
+        Domaine::observe(AuditObserver::class);
+        Service::observe(AuditObserver::class);
+        AxeSdsi::observe(AuditObserver::class);
     }
 }

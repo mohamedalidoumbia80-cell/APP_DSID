@@ -4,7 +4,7 @@
 
 Application web interne en français permettant de planifier les activités de la DSID, d’en suivre les responsables, tâches, échéances et documents, puis de produire des indicateurs et un historique fiable.
 
-Socle cible : Laravel 13, PHP 8.3, PostgreSQL, Blade, Bootstrap 5 et JavaScript. L’application est monolithique MVC ; une API mobile et les notifications sont hors du périmètre initial.
+Socle cible : Laravel 13, PHP 8.3, PostgreSQL, Blade, Bootstrap 5 et JavaScript. L’application est monolithique MVC ; une API mobile est hors du périmètre. Des notifications par e-mail (attribution d’une tâche, validation d’une activité, passage en retard) ont été ajoutées en version 2.0 ; elles passent par la file d’attente et le planificateur Laravel.
 
 ## 2. Acteurs et responsabilités
 
@@ -33,6 +33,8 @@ erDiagram
     UTILISATEUR o|--o{ JOURNAL_ACTION : effectuer
 ```
 
+`AXE_SDSI` est une entité facultative (« souhaitable » au cahier des charges) : en version 2.0 elle est **masquée de l’interface** (menu, formulaire et fiche d’activité) et n’est plus acceptée par la validation des formulaires ; la table et la relation sont conservées pour une réactivation éventuelle (suivi de l’avancement par axe, EF11).
+
 `JOURNAL_ACTION` est une entité technique complémentaire nécessaire à la règle RG14 ; elle conserve l’auteur même après désactivation d’un compte (auteur nullable si suppression exceptionnelle). Les documents peuvent être déposés avant rattachement ou être associés à une activité ; l’interface normale les rattachera à l’activité.
 
 ## 4. MLD / MPD cible
@@ -42,7 +44,7 @@ erDiagram
 - `users` : colonnes Laravel d’authentification, `first_name`, `last_name`, `role_id` obligatoire, `service_id` obligatoire, `is_active`, `last_login_at` nullable. Email unique ; mot de passe haché par Laravel.
 - `domaines` : `id`, `name` unique, `description` nullable, `is_active`, timestamps.
 - `axes_sdsi` : `id`, `title`, `description` nullable, `is_active`, timestamps.
-- `activites` : `id`, `title`, `description` nullable, `type` (`projet` / `activite_courante`), `start_date`, `due_date` nullable, `status` (`a_demarrer`, `en_cours`, `en_attente`, `termine`, `annule`), `progress` smallint 0–100, `priority` (`faible`, `moyenne`, `haute`), `domaine_id`, `responsable_id`, `axe_sdsi_id` nullable, timestamps, `deleted_at`.
+- `activites` : `id`, `title`, `description` nullable, `type` (`projet` / `activite_courante`), `start_date`, `due_date` nullable, `status` (`a_demarrer`, `en_cours`, `en_attente`, `termine`, `annule`), `progress` smallint 0–100, `priority` (`faible`, `moyenne`, `haute`), `domaine_id`, `responsable_id`, `axe_sdsi_id` nullable (non utilisé en v2.0), `validated_at` nullable et `validated_by` nullable (validation par le directeur), `late_notified_at` nullable (évite d’envoyer plusieurs fois la notification de retard), timestamps, `deleted_at`.
 - `taches` : `id`, `title`, `description` nullable, `due_date` nullable, `status` mêmes valeurs qu’une activité, `progress` smallint 0–100, `activite_id`, `agent_id`, `created_by` nullable, timestamps, `deleted_at`.
 - `documents` : `id`, `original_name`, `storage_path`, `mime_type`, `size_bytes`, `uploaded_by` nullable, `activite_id` nullable, timestamps. Le fichier est stocké sur le disque privé Laravel ; la base ne contient que ses métadonnées et son chemin.
 - `journal_actions` : `id`, `user_id` nullable, `action`, `subject_type`, `subject_id` nullable, `before` JSONB nullable, `after` JSONB nullable, `ip_address` nullable, `created_at`. Table append-only, non supprimée en cascade avec l’utilisateur ou l’objet.
@@ -94,20 +96,22 @@ La portée exacte de « lecteur » et le pouvoir de validation du directeur sont
 
 ```text
 app/
-  Enums/                 StatutActivite, TypeActivite, Priorite, Role
-  Http/Controllers/      Dashboard, Activite, Tache, Document, Admin, Audit
-  Http/Requests/         Validation dédiée par action
+  Enums/                 ActivityStatus, ActivityType, Priority
+  Http/Controllers/      Dashboard, Activite, Tache, Document, Rapport, User, Domaine, Service, AxeSdsi, Journal, Auth
+  Http/Middleware/       RoleMiddleware (contrôle du rôle par route)
+  Http/Requests/         Validation dédiée par action (activités, tâches)
   Models/                User, Role, Service, Domaine, AxeSdsi, Activite, Tache, Document, JournalAction
-  Policies/              ActivitePolicy, TachePolicy, DocumentPolicy, referentiels
-  Services/              AuditService, DashboardService, UploadDocumentService
-  Rules/                  Règles métier (progression, cohérence dates)
+  Notifications/         ActivityUpdateNotification (e-mail)
+  Observers/             AuditObserver (alimente le journal d’audit)
+  Policies/              ActivitePolicy, TachePolicy, DocumentPolicy
+  Support/               ActivityScope (périmètre de visibilité), XlsxExporter
 database/
   migrations/ seeders/ factories/
-resources/views/         layouts/, auth/, dashboard/, activites/, taches/, admin/
-routes/web.php
+resources/views/         layouts/, auth/, activites/, domaines/, admin/, rapports/, journal/, users/
+routes/web.php, routes/console.php (rappel quotidien des retards à 08 h 00)
 ```
 
-Les contrôleurs orchestrent requêtes et réponses ; les `FormRequest` valident et autorisent ; les policies définissent le périmètre ; les transactions regroupent écriture métier et audit. Les documents sont téléchargés au moyen d’une route authentifiée, jamais par URL publique directe.
+Le journal d’audit est alimenté par un observateur (`AuditObserver`) enregistré sur les activités, tâches, documents, utilisateurs, domaines, services et axes SDSI. Les contrôleurs orchestrent requêtes et réponses ; les `FormRequest` valident et autorisent ; les policies définissent le périmètre ; l’audit est écrit à chaque création, modification ou suppression d’un enregistrement suivi. Les documents sont téléchargés au moyen d’une route authentifiée, jamais par URL publique directe.
 
 ## 9. Sécurité, ergonomie et exploitation
 
@@ -116,7 +120,8 @@ Les contrôleurs orchestrent requêtes et réponses ; les `FormRequest` valident
 - Pas de suppression/modification du journal depuis l’interface ; accès et données personnelles minimisés.
 - Interface responsive Bootstrap, français/UTF-8, navigation clavier, états vides et erreurs compréhensibles.
 - Sauvegarde PostgreSQL et documents avec procédure de restauration documentée ; la sauvegarde ne doit pas être confondue avec le seul redémarrage des conteneurs.
-- Docker doit fournir PHP-FPM, Nginx et PostgreSQL. Le montage actuel pointe vers `./dsid`, absent à ce stade ; la configuration Nginx attend `dsid/public`. La conception du code doit être suivie de l’initialisation effective du projet Laravel avant de démarrer cette pile.
+- Docker fournit PHP-FPM, Nginx, PostgreSQL, un conteneur `queue` (notifications) et un conteneur `scheduler` (rappels de retard). Le projet Laravel se trouve dans `./dsid`, servi depuis `dsid/public`. Le mot de passe PostgreSQL se règle par la variable `DSID_DB_PASSWORD` (valeur par défaut de développement uniquement) ; `.env`, la base SQLite locale, les documents déposés et les journaux ne doivent pas être versionnés ni transmis.
+- Les comptes de démonstration (`*@dsid.test`) sont créés par `UsersSeeder` ; en production, la variable `DSID_SEED_PASSWORD` est obligatoire pour les créer et ils doivent être remplacés par de vrais comptes.
 
 ## 10. Ordre de réalisation proposé
 
@@ -128,3 +133,13 @@ Les contrôleurs orchestrent requêtes et réponses ; les `FormRequest` valident
 6. Ajouter exports, sauvegarde automatisée et documentation d’exploitation.
 
 Les choix ouverts du tableau d’autorisations et la cardinalité « service/utilisateurs » doivent être validés avec le métier avant la mise en production ; les hypothèses ci-dessus permettent néanmoins de démarrer le modèle et d’être corrigées par migrations avant déploiement.
+
+## 11. Journal des modifications de la version 2.0
+
+- Menu d’administration : ajout du lien **Domaines** (la page de gestion existait mais n’était pas accessible) ; masquage de l’axe SDSI.
+- Journal d’audit étendu aux domaines, services et axes SDSI.
+- Tableau de bord : suppression du cache de 5 minutes (les compteurs reflètent immédiatement les modifications).
+- Formulaire de création d’activité : seuls les statuts « à démarrer », « en attente » et « annulé » sont proposés (une activité ne peut pas démarrer sans tâche).
+- Sécurité d’exploitation : mot de passe PostgreSQL paramétrable, mot de passe des comptes de démonstration obligatoire en production.
+- Tests ajoutés : dépôt et téléchargement de documents, accès à l’administration, création d’activités selon le rôle.
+- Points métier à confirmer avant mise en production : périmètre exact du rôle « lecteur » (aujourd’hui toutes les activités) et pouvoir de validation du directeur.

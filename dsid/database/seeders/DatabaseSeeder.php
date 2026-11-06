@@ -18,6 +18,7 @@ class DatabaseSeeder extends Seeder
             RolesSeeder::class,
             ServicesSeeder::class,
             DomainesSeeder::class,
+            AxeSdsiSeeder::class,
             UsersSeeder::class,
         ]);
     }

@@ -61,6 +61,11 @@ class Activite extends Model
         return $this->hasMany(Document::class);
     }
 
+    public function commentaires(): HasMany
+    {
+        return $this->hasMany(Commentaire::class);
+    }
+
     public function validateur(): BelongsTo
     {
         return $this->belongsTo(User::class, 'validated_by');

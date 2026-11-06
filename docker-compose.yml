@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: dsid
       POSTGRES_USER: dsid
-      POSTGRES_PASSWORD: momo7
+      POSTGRES_PASSWORD: ${DSID_DB_PASSWORD:-change_me_locally}
     ports:
       - "7001:5432"
     volumes:
@@ -36,6 +36,36 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  scheduler:
+    image: app_dsid-app
+    container_name: dsid_scheduler
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan schedule:work
+    volumes:
+      - ./dsid:/var/www/html
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    networks:
+      - dsid_network
+    depends_on:
+      db:
+        condition: service_healthy
+
+  queue:
+    image: app_dsid-app
+    container_name: dsid_queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    command: php artisan queue:work --tries=3
+    volumes:
+      - ./dsid:/var/www/html
+      - ./docker/php/local.ini:/usr/local/etc/php/conf.d/local.ini
+    networks:
+      - dsid_network
+    depends_on:
+      db:
+        condition: service_healthy
 
   nginx:
     image: nginx:alpine

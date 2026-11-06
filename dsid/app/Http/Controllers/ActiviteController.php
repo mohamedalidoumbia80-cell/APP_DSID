@@ -5,13 +5,15 @@ namespace App\Http\Controllers;
 use App\Enums\ActivityStatus;
 use App\Enums\ActivityType;
 use App\Enums\Priority;
+use App\Http\Requests\StoreActiviteRequest;
+use App\Http\Requests\UpdateActiviteRequest;
 use App\Models\Activite;
-use App\Models\AxeSdsi;
 use App\Models\Domaine;
 use App\Models\User;
+use App\Notifications\ActivityUpdateNotification;
+use App\Support\ActivityScope;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 class ActiviteController extends Controller
@@ -22,16 +24,9 @@ class ActiviteController extends Controller
         $user = $request->user();
         $query = Activite::query()->with(['domaine', 'responsable'])->withCount('taches');
 
-        if (! $user->hasRole('administrateur', 'directeur', 'lecteur')) {
-            $query->where(function ($scope) use ($user): void {
-                $scope->where('responsable_id', $user->id)->orWhereHas('taches', fn ($tasks) => $tasks->where('agent_id', $user->id));
-                if ($user->hasRole('chef_service')) {
-                    $scope->orWhereHas('responsable', fn ($responsible) => $responsible->where('service_id', $user->service_id));
-                }
-            });
-        }
+        ActivityScope::visibleTo($query, $user);
 
-        $query->when($request->filled('q'), fn ($builder) => $builder->where('title', 'ilike', '%'.$request->string('q')->toString().'%'))
+        $query->when($request->filled('q'), fn ($builder) => $builder->whereRaw('LOWER(title) LIKE ?', ['%'.mb_strtolower($request->string('q')->toString()).'%']))
             ->when($request->filled('domaine_id'), fn ($builder) => $builder->where('domaine_id', $request->integer('domaine_id')))
             ->when($request->filled('status'), fn ($builder) => $builder->where('status', $request->string('status')->toString()))
             ->when($request->filled('priority'), fn ($builder) => $builder->where('priority', $request->string('priority')->toString()))
@@ -49,36 +44,58 @@ class ActiviteController extends Controller
     public function create(): View
     {
         $this->authorize('create', Activite::class);
-        return view('activites.create', $this->formData());
+
+        $formData = $this->formData();
+        // Sans tâche, seuls les statuts initiaux sont cohérents à la création.
+        $formData['statuses'] = [ActivityStatus::A_DEMARRER, ActivityStatus::EN_ATTENTE, ActivityStatus::ANNULE];
+
+        return view('activites.create', $formData);
     }
 
-    public function store(Request $request): RedirectResponse
+    public function store(StoreActiviteRequest $request): RedirectResponse
     {
         $this->authorize('create', Activite::class);
-        $activity = Activite::create($this->validatedData($request) + ['progress' => 0]);
+        $data = $request->validated();
+        $data['progress'] = 0;
+        $activity = Activite::create($data);
+
         return redirect()->route('activites.show', $activity)->with('success', 'Activité créée.');
     }
 
     public function show(Activite $activite): View
     {
         $this->authorize('view', $activite);
-        $activite->load(['domaine', 'responsable', 'axeSdsi', 'taches.agent', 'documents.uploader']);
+        $activite->load([
+            'domaine',
+            'responsable',
+            'taches.agent',
+            'documents.uploader',
+            'commentaires' => fn ($query) => $query->with('auteur')->orderBy('date'),
+        ]);
         $agents = User::where('is_active', true)->whereHas('role', fn ($query) => $query->where('name', 'agent'))->orderBy('last_name')->get();
+
         return view('activites.show', compact('activite', 'agents'));
     }
 
     public function edit(Activite $activite): View
     {
         $this->authorize('update', $activite);
+
         return view('activites.edit', $this->formData() + compact('activite'));
     }
 
-    public function update(Request $request, Activite $activite): RedirectResponse
+    public function update(UpdateActiviteRequest $request, Activite $activite): RedirectResponse
     {
         $this->authorize('update', $activite);
-        $data = $this->validatedData($request);
+        $data = $request->validated();
         unset($data['progress']);
+        $resetLateNotification = $activite->due_date?->toDateString() !== ($data['due_date'] ?? null)
+            || $activite->status?->value !== ($data['status'] ?? null);
         $activite->update($data);
+        if ($resetLateNotification) {
+            $activite->forceFill(['late_notified_at' => null])->saveQuietly();
+        }
+
         return redirect()->route('activites.show', $activite)->with('success', 'Activité mise à jour.');
     }
 
@@ -86,6 +103,7 @@ class ActiviteController extends Controller
     {
         $this->authorize('delete', $activite);
         $activite->delete();
+
         return redirect()->route('activites.index')->with('success', 'Activité archivée.');
     }
 
@@ -93,6 +111,11 @@ class ActiviteController extends Controller
     {
         $this->authorize('validate', $activite);
         $activite->update(['validated_at' => now(), 'validated_by' => $request->user()->id]);
+        $activite->responsable->notify(new ActivityUpdateNotification(
+            $activite,
+            'Votre activité a été validée',
+            'La direction vient de valider votre activité.',
+        ));
 
         return back()->with('success', 'Activité validée par la direction.');
     }
@@ -101,42 +124,10 @@ class ActiviteController extends Controller
     {
         return [
             'domaines' => Domaine::where('is_active', true)->orderBy('name')->get(),
-            'axes' => AxeSdsi::where('is_active', true)->orderBy('title')->get(),
             'responsables' => User::where('is_active', true)->with('role')->orderBy('last_name')->get(),
             'types' => ActivityType::cases(),
             'statuses' => ActivityStatus::cases(),
             'priorities' => Priority::cases(),
         ];
-    }
-
-    private function validatedData(Request $request): array
-    {
-        $data = $request->validate([
-            'title' => ['required', 'string', 'max:200'],
-            'description' => ['nullable', 'string', 'max:10000'],
-            'type' => ['required', Rule::enum(ActivityType::class)],
-            'start_date' => ['required', 'date'],
-            'due_date' => ['nullable', 'date', 'after_or_equal:start_date', Rule::requiredIf($request->input('type') === ActivityType::PROJET->value)],
-            'status' => ['required', Rule::enum(ActivityStatus::class)],
-            'progress' => ['sometimes', 'integer', 'between:0,100'],
-            'priority' => ['required', Rule::enum(Priority::class)],
-            'domaine_id' => ['required', 'integer', 'exists:domaines,id'],
-            'responsable_id' => ['required', 'integer', 'exists:users,id'],
-            'axe_sdsi_id' => ['nullable', 'integer', 'exists:axes_sdsi,id'],
-        ]);
-
-        if (in_array($data['status'], [ActivityStatus::EN_COURS->value, ActivityStatus::TERMINE->value], true)
-            && ($request->route('activite') === null || $request->route('activite')->taches()->count() === 0)) {
-            abort(422, 'Ajoutez au moins une tâche avant de démarrer ou terminer cette activité.');
-        }
-
-        if ($request->route('activite') === null) {
-            $data['progress'] = 0;
-        } elseif ($data['status'] === ActivityStatus::TERMINE->value
-            && $request->route('activite')->taches()->where('status', '!=', ActivityStatus::TERMINE->value)->exists()) {
-            abort(422, 'Toutes les tâches doivent être terminées avant de clôturer l’activité.');
-        }
-
-        return $data;
     }
 }

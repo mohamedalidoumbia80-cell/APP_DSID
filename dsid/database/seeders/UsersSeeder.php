@@ -12,7 +12,13 @@ class UsersSeeder extends Seeder
     public function run(): void
     {
         $service = Service::firstOrCreate(['name' => 'Direction des Systèmes d’Information et de la Digitalisation']);
-        $password = (string) env('DSID_SEED_PASSWORD', 'ChangeMe123!');
+        $password = env('DSID_SEED_PASSWORD');
+
+        if (app()->isProduction() && empty($password)) {
+            throw new \RuntimeException('Définissez DSID_SEED_PASSWORD avant de créer les comptes initiaux en production.');
+        }
+
+        $password = (string) ($password ?: 'ChangeMe123!');
 
         foreach ([
             ['Administrateur', 'DSID', 'admin@dsid.test', 'administrateur'],

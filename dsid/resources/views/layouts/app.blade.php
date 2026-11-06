@@ -39,6 +39,8 @@
         @if(auth()->user()->hasRole('administrateur','directeur','chef_service','lecteur'))<a class="{{ request()->routeIs('rapports.*')?'active':'' }}" href="{{ route('rapports.index') }}">Rapports</a>@endif
         @if(auth()->user()->hasRole('administrateur'))
             <a href="{{ route('admin.users.index') }}">Administration</a>
+            <a class="{{ request()->routeIs('admin.domaines.*')?'active':'' }}" href="{{ route('admin.domaines.index') }}">Domaines</a>
+            <a class="{{ request()->routeIs('admin.services.*')?'active':'' }}" href="{{ route('admin.services.index') }}">Services</a>
             <a href="{{ route('admin.journal.index') }}">Journal</a>
         @endif
     </nav>
